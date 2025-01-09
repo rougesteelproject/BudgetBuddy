@@ -22,8 +22,11 @@ async function setupPlaidLink() {
       onSuccess: async (metadata) => {
         console.log('Plaid Link completed with metadata:', metadata);
       },
-      onExit: (err, metadata) => {
-        if (err) {
+      onExit: async (err, metadata) => {
+        if (err && err.error_code === 'ITEM_LOGIN_REQUIRED') {
+          console.log('User needs to update login details. Switching to update mode.');
+          await setupPlaidLinkUpdate();
+        } else if (err) {
           console.error('User exited Plaid Link with error:', err);
         } else {
           console.log('User exited Plaid Link:', metadata);
@@ -42,6 +45,39 @@ async function setupPlaidLink() {
     plaidLinkDiv.appendChild(button);
   } catch (err) {
     console.error('Error setting up Plaid Link:', err);
+  }
+}
+
+async function setupPlaidLinkUpdate() {
+  try {
+    const response = await fetch('/plaid-link-token-update');
+    const { link_token } = await response.json();
+
+    if (!link_token) {
+      console.error('Failed to retrieve link_token for update');
+      return;
+    }
+
+    const handler = Plaid.create({
+      token: link_token,
+      onSuccess: async (metadata) => {
+        console.log('Plaid Link update completed with metadata:', metadata);
+      },
+      onExit: (err, metadata) => {
+        if (err) {
+          console.error('User exited Plaid Link update with error:', err);
+        } else {
+          console.log('User exited Plaid Link update:', metadata);
+        }
+      },
+      onEvent: (eventName, metadata) => {
+        console.log('Plaid Link update event:', eventName, metadata);
+      },
+    });
+
+    handler.open();
+  } catch (err) {
+    console.error('Error setting up Plaid Link update:', err);
   }
 }
 

@@ -71,6 +71,35 @@ fastify.get('/plaid-link-token', async (req, reply) => {
   }
 });
 
+fastify.get('/plaid-link-token-update', async (req, reply) => {
+  try {
+    const userId = process.env.USER_ID; // Assuming user_id is stored in the session after login
+
+    if (!userId) {
+      return reply.status(400).send({ error: 'User ID is required' });
+    }
+
+    const accessTokens = await db.getAccessTokensAndCursors(userId);
+    if (accessTokens.length === 0) {
+      return reply.status(400).send({ error: 'No access tokens found for user' });
+    }
+
+    const response = await plaidClient.linkTokenCreate({
+      user: { client_user_id: userId },
+      client_name: "Budget Buddy",
+      country_codes: ['US'],
+      language: 'en',
+      webhook: 'https://d059-136-50-192-208.ngrok-free.app/plaid-webhook',
+      access_token: accessTokens[0].access_token,
+    });
+
+    reply.send({ link_token: response.data.link_token });
+  } catch (error) {
+    console.error('Error in creating Plaid link token for update:', error);
+    reply.status(500).send({ error: 'Failed to create link token for update' });
+  }
+});
+
 // Webhook to handle Plaid events
 fastify.post('/plaid-webhook', async (request, reply) => {
   
