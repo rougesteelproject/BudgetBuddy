@@ -2,3 +2,4 @@ components/Link.jsx
 node_modules/
 package-lock.json
 .env
+budget_buddy.db
