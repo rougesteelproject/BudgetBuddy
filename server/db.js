@@ -64,24 +64,24 @@ db.serialize(() => {
 });
 
 // Function to save a transaction
-function saveTransaction(transaction) {
-  const { id, category_id, amount, name, date, parent_id} = transaction;
+async function saveTransaction(transaction) {
+  const { id, category_id, amount, name, date } = transaction;
 
   return new Promise((resolve, reject) => {
     db.run(
-      `INSERT INTO transactions (id, category_id, amount, name, date, parent_id)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO transactions (id, category_id, amount, name, date)
+       VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          category_id = excluded.category_id,
          amount = excluded.amount,
          name = excluded.name,
-         date = excluded.date,
-         parent_id = excluded.parent_id;`,
-      [ id, category_id, amount, name, date, parent_id],
-      (err) => {
+         date = excluded.date;`,
+      [id, category_id, amount, name, date],
+      async (err) => {
         if (err) {
           reject(err);
         } else {
+          await recalculatePriorityExpenses(process.env.USER_ID);
           resolve();
         }
       }
@@ -109,39 +109,19 @@ function getTransactions(user_id) {
   });
 }
 
-function updateTransactionCategory(transactionId, categoryId) {
-  console.log('Updating transaction:', transactionId, 'to new category ID:', categoryId);
+async function updateTransactionCategory(transactionId, categoryId) {
   return new Promise((resolve, reject) => {
     const sql = `
       UPDATE transactions 
       SET category_id = ? 
       WHERE id = ?
     `;
-    db.run(sql, [categoryId, String(transactionId)], function (err) {
+    db.run(sql, [categoryId, String(transactionId)], async function (err) {
       if (err) {
-        console.log('Error trying to update transaction category:', err);
         return reject(err);
       }
-      console.log('Changes:', this.changes);
-      if (this.changes === 0) {
-        console.log('Transaction not found or no changes made.');
-        return reject(new Error('Transaction not found or no changes made.'));
-      }
-
-      // Verify the update
-      const verificationSql = 'SELECT * FROM transactions WHERE id = ?';
-      db.get(verificationSql, [String(transactionId)], (verifyErr, row) => {
-        if (verifyErr) {
-          console.log('Error verifying transaction update:', verifyErr);
-          return reject(verifyErr);
-        }
-        if (!row) {
-          console.log('No transaction found with ID after update:', transactionId);
-          return reject(new Error('No transaction found after update.'));
-        }
-        console.log('Transaction successfully updated:', row);
-        resolve();
-      });
+      await recalculatePriorityExpenses(process.env.USER_ID);
+      resolve();
     });
   });
 }
@@ -278,8 +258,7 @@ function createCategory(name, user_id, priority_value = 0, category_limit = null
   return new Promise((resolve, reject) => {
     db.run(
       `INSERT INTO categories (name, user_id, priority_value, category_limit, parent_id) VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(name) DO UPDATE SET
-        user_id = excluded.user_id,
+      ON CONFLICT(name, user_id) DO UPDATE SET
         priority_value = excluded.priority_value,
         category_limit = excluded.category_limit,
         parent_id = excluded.parent_id`,
@@ -295,44 +274,40 @@ function createCategory(name, user_id, priority_value = 0, category_limit = null
 }
 
 // Function to update an existing category
-function updateCategory(id, name) {
+async function updateCategory(id, name) {
   return new Promise((resolve, reject) => {
     db.run(
       `UPDATE categories SET name = ? WHERE id = ?`,
       [name, id],
-      function (err) {
+      async function (err) {
         if (err) return reject(err);
+        await recalculatePriorityExpenses(process.env.USER_ID);
         resolve();
       }
     );
   });
 }
 
-async function reorderCategories(updates) {
-  try {
-    const results = await Promise.all(
-      updates.map(({ id, priority_value }) =>
-        new Promise((resolve, reject) => {
-          db.run(
-            `UPDATE categories SET priority_value = ? WHERE id = ?`,
-            [priority_value, id],
-            function (err) {
-              if (err) {
-                reject(err);
-              } else {
-                resolve({ id, changes: this.changes });
-              }
-            }
-          );
-        })
-      )
-    );
-    console.log('Categories reordered successfully:', results);
-    return results;
-  } catch (error) {
-    console.error('Error reordering categories:', error);
-    throw error;
-  }
+// Function to reorder categories
+function reorderCategories(updates) {
+  return new Promise((resolve, reject) => {
+    const queries = updates.map(({ id, priority_value }) => {
+      return new Promise((resolve, reject) => {
+        db.run(
+          `UPDATE categories SET priority_value = ? WHERE id = ?`,
+          [priority_value, id],
+          function (err) {
+            if (err) return reject(err);
+            resolve();
+          }
+        );
+      });
+    });
+
+    Promise.all(queries)
+      .then(() => resolve())
+      .catch((err) => reject(err));
+  });
 }
 
 async function reorderSubcategories(updates) {
@@ -407,7 +382,7 @@ function getCategoryId(category_name, user_id, priority_value = 0, category_limi
   return new Promise((resolve, reject) => {
     db.run(
       `INSERT INTO categories (name, user_id) VALUES (?, ?) 
-       ON CONFLICT(name) DO NOTHING`,
+       ON CONFLICT(name, user_id) DO NOTHING`,
       [category_name, user_id],
       function (err) {
         if (err) {
@@ -576,23 +551,6 @@ function updateCursor(access_token, cursor) {
   });
 }
 
-// Function to delete an access token (in case of item removal)
-function deleteAccessToken(item_id) {
-  return new Promise((resolve, reject) => {
-    db.run(
-      `DELETE FROM access_tokens WHERE item_id = ?`,
-      [item_id],
-      (err) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve();
-        }
-      }
-    );
-  });
-}
-
 // Get category details
 function getCategory(category_id) {
   return new Promise((resolve, reject) => {
@@ -695,6 +653,45 @@ async function distributeExpense(category_id, price) {
   });
 }
 
+async function recalculatePriorityExpenses(user_id) {
+  const categories = await getCategoriesWithLimitsAndPriority(user_id);
+  const subcategories = await getSubcategoriesWithTransactions(user_id);
+
+  const sortedCategories = categories.sort((a, b) => a.priority_value - b.priority_value);
+  const sortedSubcategories = subcategories.sort((a, b) => a.priority_value - b.priority_value);
+
+  for (const category of sortedCategories) {
+    let remainingBudget = category.category_limit;
+
+    for (const subcategory of sortedSubcategories.filter(sc => sc.parent_id === category.id)) {
+      if (subcategory.earmark) continue;
+
+      const subcategoryTotal = subcategory.total_transactions || 0;
+      const subcategoryLimit = subcategory.category_limit;
+
+      const allocation = Math.min(remainingBudget, subcategoryTotal);
+      subcategory.priority_expenses = allocation;
+      remainingBudget -= allocation;
+
+      await updateSubcategoryExpenses(subcategory.id, subcategory.priority_expenses);
+    }
+
+    const categoryTotal = category.total_transactions || 0;
+    const allocation = Math.min(remainingBudget, categoryTotal);
+    category.priority_expenses = allocation;
+
+    await updateSubcategoryExpenses(category.id, category.priority_expenses);
+  }
+}
+
+async function removeAccessToken(userId, accessToken) {
+  // Delete the access token and related item from the database
+  const query = 'DELETE FROM access_tokens WHERE user_id = ? AND access_token = ?';
+  await db.run(query, [userId, accessToken]);
+}
+module.exports = { removeAccessToken, /* other methods */ };
+
+
 module.exports = {
   updateCursor,
   getCategoryId,
@@ -703,7 +700,7 @@ module.exports = {
   updateTransactionCategory,
   getAccessTokensAndCursors,
   saveAccessToken,
-  deleteAccessToken,
+  removeAccessToken,
   saveUserToken,
   getUserToken,
   getCategories,

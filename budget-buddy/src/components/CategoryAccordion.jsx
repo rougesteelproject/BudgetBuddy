@@ -1,36 +1,102 @@
 import React, { useState } from 'react';
+import axios from 'axios';
+import { Accordion, AccordionSummary, AccordionDetails, Typography, TextField, Button, Switch, FormControlLabel, Select, MenuItem, Tooltip } from '@mui/material';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import TransactionItem from './TransactionItem';
 
-function CategoryAccordion({ data }) {
-  const [isOpen, setIsOpen] = useState(false);
+const CategoryAccordion = ({ category, transactions, showPriorityExpenses, editMode, categories }) => {
+  const [categoryName, setCategoryName] = useState(category.name);
+  const [categoryLimit, setCategoryLimit] = useState(category.category_limit);
+  const [categoryPriority, setCategoryPriority] = useState(category.priority_value);
+  const [isEarmarked, setIsEarmarked] = useState(category.earmark);
+  const [parentCategoryId, setParentCategoryId] = useState(category.parent_id);
 
-  const toggleAccordion = () => setIsOpen(!isOpen);
+  const handleNameChange = (e) => setCategoryName(e.target.value);
+  const handleLimitChange = (e) => setCategoryLimit(e.target.value);
+  const handlePriorityChange = (e) => setCategoryPriority(e.target.value);
+  const handleEarmarkChange = () => setIsEarmarked(!isEarmarked);
+  const handleParentCategoryChange = (e) => setParentCategoryId(e.target.value);
+
+  const saveCategoryChanges = async () => {
+    try {
+      await axios.put(`/categories/${category.id}`, {
+        name: categoryName,
+        category_limit: categoryLimit,
+        priority_value: categoryPriority,
+        earmark: isEarmarked,
+        parent_id: parentCategoryId,
+      });
+      // Optionally, refresh the data or show a success message
+    } catch (error) {
+      console.error('Error saving category changes:', error);
+    }
+  };
 
   return (
-    <div style={{ marginBottom: '10px', border: '1px solid #ddd', borderRadius: '4px' }}>
-      <button
-        style={{
-          width: '100%',
-          padding: '10px',
-          backgroundColor: isOpen ? '#f0f0f0' : '#fff',
-          border: 'none',
-          textAlign: 'left',
-          cursor: 'pointer',
-        }}
-        onClick={toggleAccordion}
-      >
-        {data.category} (Total: $
-        {data.transactions.reduce((sum, t) => sum + t.amount, 0).toFixed(2)})
-      </button>
-      {isOpen && (
-        <div style={{ padding: '10px', borderTop: '1px solid #ddd' }}>
-          {data.transactions.map((transaction) => (
-            <TransactionItem key={transaction.id} transaction={transaction} />
-          ))}
-        </div>
-      )}
-    </div>
+    <Accordion>
+      <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+        <Typography variant="h6">
+          {category.name}
+        </Typography>
+        <Tooltip title={`Total: ${category.total}, Earmark: ${category.earmark}, Limit: ${category.category_limit}, Priority Expenses: ${category.priority_expenses}`}>
+          <Typography variant="body2" color="text.secondary" style={{ marginLeft: '1rem' }}>
+            Total: ${category.total}, Limit: ${category.category_limit}, Priority: {category.priority_value}
+          </Typography>
+        </Tooltip>
+      </AccordionSummary>
+      <AccordionDetails>
+        {editMode ? (
+          <div>
+            <TextField label="Category Name" value={categoryName} onChange={handleNameChange} />
+            <TextField label="Category Limit" type="number" value={categoryLimit} onChange={handleLimitChange} />
+            <TextField label="Priority Value" type="number" value={categoryPriority} onChange={handlePriorityChange} />
+            <FormControlLabel
+              control={<Switch checked={isEarmarked} onChange={handleEarmarkChange} />}
+              label="Earmarked"
+            />
+            <Select
+              label="Parent Category"
+              value={parentCategoryId}
+              onChange={handleParentCategoryChange}
+            >
+              <MenuItem value={null}>None</MenuItem>
+              {categories.filter(cat => cat.id !== category.id).map(cat => (
+                <MenuItem key={cat.id} value={cat.id}>{cat.name}</MenuItem>
+              ))}
+            </Select>
+            <Button variant="contained" color="primary" onClick={saveCategoryChanges}>
+              Save
+            </Button>
+          </div>
+        ) : null}
+        {transactions.length > 0 ? (
+          transactions.map((transaction) => (
+            <TransactionItem key={transaction.id} transaction={transaction} categories={categories} editMode={editMode} />
+          ))
+        ) : (
+          <Typography variant="body2" color="text.secondary">
+            No transactions for this category.
+          </Typography>
+        )}
+        {category.subcategories.length > 0 && (
+          <div style={{ marginLeft: '1rem' }}>
+            {category.subcategories.map((subcategory) => (
+              <CategoryAccordion
+                key={subcategory.id}
+                category={subcategory}
+                transactions={transactions.filter(
+                  (transaction) => transaction.category_id === subcategory.id
+                )}
+                showPriorityExpenses={showPriorityExpenses}
+                editMode={editMode}
+                categories={categories}
+              />
+            ))}
+          </div>
+        )}
+      </AccordionDetails>
+    </Accordion>
   );
-}
+};
 
 export default CategoryAccordion;

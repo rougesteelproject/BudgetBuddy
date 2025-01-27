@@ -7,7 +7,13 @@ require('dotenv').config();
 
 // Routes
 
-fastify.get('/plaid-link-token', async (req, reply) => {
+fastify.register(require('@fastify/cors'), {
+  origin: true,
+  methods: ['GET', 'POST'],
+});
+
+
+fastify.get('/api/create_link_token', async (req, reply) => {
   try {
     // Example: Get the user ID from the session or request context
     const userId = process.env.USER_ID;  // Assuming user_id is stored in the session after login
@@ -38,7 +44,7 @@ fastify.get('/plaid-link-token', async (req, reply) => {
       products: ['transactions'],
       country_codes: ['US'],
       language: 'en',
-      webhook: process.env.CALLBACK + '/plaid-webhook'
+      webhook: process.env.CALLBACK + 'plaid-webhook'
     });
 
     console.log('Link token created successfully for user:', userId);
@@ -57,58 +63,104 @@ fastify.get('/plaid-link-token-update', async (req, reply) => {
       return reply.status(400).send({ error: 'User ID is required' });
     }
 
-    const accessTokens = await db.getAccessTokensAndCursors(userId);
-    if (accessTokens.length === 0) {
+    const accessTokensAndCursors = await db.getAccessTokensAndCursors(userId);
+    if (accessTokensAndCursors.length === 0) {
       return reply.status(400).send({ error: 'No access tokens found for user' });
     }
 
-    const response = await plaidClient.linkTokenCreate({
-      user: { client_user_id: userId },
-      client_name: "Budget Buddy",
-      country_codes: ['US'],
-      language: 'en',
-      webhook: process.env.WEBHOOK + '/plaid-webhook',
-      access_token: accessTokens[0].access_token,
-    });
+    const updateLinks = [];
+    for (const { access_token } of accessTokensAndCursors) {
+      const response = await plaidClient.linkTokenCreate({
+        user: { client_user_id: userId },
+        client_name: "Budget Buddy",
+        country_codes: ['US'],
+        language: 'en',
+        webhook: process.env.CALLBACK + 'plaid-webhook',
+        access_token,
+      });
+      updateLinks.push({ access_token, link_token: response.data.link_token });
+    }
 
-    reply.send({ link_token: response.data.link_token });
+    reply.send({ updateLinks });
   } catch (error) {
-    console.error('Error in creating Plaid link token for update:', error);
-    reply.status(500).send({ error: 'Failed to create link token for update' });
+    console.error('Error in creating Plaid update link tokens:', error);
+    reply.status(500).send({ error: 'Failed to create update link tokens' });
   }
 });
 
-// Webhook to handle Plaid events
-fastify.post('/plaid-webhook', async (request, reply) => {
-  
-  const webhookType = request.body.webhook_type;
-  const webhookCode = request.body.webhook_code;
-  console.log('WEBHOOK HIT:', webhookType, webhookCode);
+fastify.get('/api/access-tokens', async (req, reply) => {
+  try {
+    const userId = process.env.USER_ID; // Retrieve user ID dynamically
 
-  if (webhookType === 'LINK' && webhookCode === 'ITEM_ADD_RESULT') {
-    console.log('Handling ITEM_ADD_RESULT webhook...');
-    console.log(request.body);
-    const publicToken = request.body.public_token;
-
-    try {
-      const exchangeResponse = await plaidClient.itemPublicTokenExchange({
-        public_token: publicToken
-      });
-
-      const accessToken = exchangeResponse.data.access_token;
-      const itemId = exchangeResponse.data.item_id;
-
-      const userId = process.env.USER_ID;
-
-      await db.saveAccessToken(userId, accessToken, itemId);
-      console.log(`Stored access token for user ${userId}`);
-
-    } catch (error) {
-      console.error('Error exchanging public token:', error);
+    if (!userId) {
+      return reply.status(400).send({ error: 'User ID is required' });
     }
+
+    const accessTokensAndCursors = await db.getAccessTokensAndCursors(userId);
+    reply.send({ accessTokensAndCursors });
+  } catch (error) {
+    console.error('Error fetching access tokens:', error);
+    reply.status(500).send({ error: 'Failed to fetch access tokens' });
+  }
+});
+
+// Remove a Plaid Item
+fastify.delete('/item/remove', async (request, reply) => {
+  const { access_token } = request.body;
+
+  if (!access_token) {
+    return reply.status(400).send({ error: 'Access token is required.' });
   }
 
-  reply.status(200).send('Webhook received');
+  try {
+    // Call Plaid's itemRemove method
+    await plaidClient.itemRemove({ access_token });
+
+    // Remove the access token and associated item from the database
+    const userId = process.env.USER_ID; // Replace with actual user ID logic
+    await db.removeAccessToken(userId, access_token);
+
+    reply.send({ success: true, message: 'Item removed successfully.' });
+  } catch (error) {
+    console.error('Error removing item:', error);
+    reply.status(500).send({ error: 'Failed to remove item.' });
+  }
+});
+
+fastify.post('/plaid-webhook', async (request, reply) => {
+  const { webhook_type, webhook_code, link_session_id, public_tokens } = request.body;
+
+  if (webhook_type === 'LINK' && webhook_code === 'SESSION_FINISHED') {
+    console.log('SESSION_FINISHED webhook received:', request.body);
+
+    if (Array.isArray(public_tokens) && public_tokens.length > 0) {
+      try {
+        for (const publicToken of public_tokens) {
+          // Exchange the public_token for an access_token
+          const exchangeResponse = await plaidClient.itemPublicTokenExchange({
+            public_token: publicToken,
+          });
+
+          const accessToken = exchangeResponse.data.access_token;
+          const itemId = exchangeResponse.data.item_id;
+
+          console.log('Access token obtained:', accessToken);
+
+          // Save the access_token and item_id in your database
+          const userId = process.env.USER_ID; // Replace with dynamic user ID retrieval
+          await db.saveAccessToken(userId, accessToken, itemId);
+        }
+      } catch (error) {
+        console.error('Error exchanging public token:', error);
+        return reply.status(500).send('Failed to exchange public token');
+      }
+    }
+
+    reply.status(200).send('Webhook received');
+  } else {
+    console.log('Unhandled webhook:', request.body);
+    reply.status(200).send('Webhook received');
+  }
 });
 
 // Fetch and store transactions for a specific access token
@@ -211,27 +263,22 @@ async function redistributeExpenses(user_id) {
 
 fastify.get('/api/transactions', async (request, reply) => {
   try {
-    const user_id = process.env.USER_ID; // Retrieve user ID dynamically
+    const user_id = process.env.USER_ID;
 
     const accessTokensAndCursors = await db.getAccessTokensAndCursors(user_id);
-
-    console.log("Fetching transactions for:", user_id);
-    console.log(accessTokensAndCursors);
 
     for (const { access_token, cursor } of accessTokensAndCursors) {
       await fetchAndStoreTransactions(access_token, cursor, user_id);
     }
 
-    await redistributeExpenses(user_id);
+    await recalculatePriorityExpenses(user_id);
 
     const categories = await db.getCategoriesWithLimitsAndPriority(user_id);
-    console.log("Categories:", categories);
     const transactions = await db.getTransactions(user_id);
-    console.log("Transactions:", transactions);
     reply.send({ categories, transactions });
   } catch (error) {
     console.error('Error fetching transactions:', error);
-    reply.status(500).send({ error: 'Failed to fetch transactions' });
+    reply.status(500).send({ error: 'Server: Failed to fetch transactions' });
   }
 });
 
@@ -245,8 +292,8 @@ fastify.put('/api/transactions/:transactionId/change-category', async (request, 
   }
 
   try {
-    console.log('Received request to change transaction:', transactionId, 'to category ID:', category_id);
     await db.updateTransactionCategory(transactionId, category_id);
+    await recalculatePriorityExpenses(process.env.USER_ID);
     reply.send({ success: true, message: 'Transaction category updated successfully.' });
   } catch (err) {
     console.error('Error updating transaction category:', err);
@@ -289,28 +336,29 @@ fastify.post('/categories/new', async (request, reply) => {
 // Update a category
 fastify.put('/categories/:id', async (request, reply) => {
   const { id } = request.params;
-  const { name, parent_id, category_limit } = request.body;
+  const { name, parent_id, category_limit, priority_value } = request.body;
 
   try {
     const promises = [];
 
-    // Update category name if provided
     if (name) {
       promises.push(db.updateCategory(id, name));
     }
 
-    // Update parent category if provided
     if (parent_id !== undefined) {
       promises.push(db.updateParentId(id, parent_id || null));
     }
 
-    // Update category limit if provided
     if (category_limit !== undefined) {
       promises.push(db.updateCategoryLimit(id, category_limit));
     }
 
-    // Wait for all updates to complete
+    if (priority_value !== undefined) {
+      promises.push(db.updateCategoryPriority(id, priority_value));
+    }
+
     await Promise.all(promises);
+    await recalculatePriorityExpenses(process.env.USER_ID);
 
     reply.send({ success: true, message: 'Category updated successfully' });
   } catch (error) {
@@ -342,6 +390,69 @@ fastify.put('/subcategories/reorder', async (request, reply) => {
     reply.status(500).send({ error: 'Failed to reorder subcategories' });
   }
 });
+
+// Simulate priority expenses
+fastify.post('/simulate-priority-expenses', async (request, reply) => {
+  const { category_id, amount, include_earmarked } = request.body;
+
+  try {
+    const result = await simulatePriorityExpenses(category_id, amount, include_earmarked);
+    reply.send({ success: true, message: result });
+  } catch (error) {
+    console.error('Error simulating priority expenses:', error);
+    reply.status(500).send({ error: 'Failed to simulate priority expenses' });
+  }
+});
+
+async function simulatePriorityExpenses(category_id, amount, include_earmarked) {
+  const user_id = process.env.USER_ID;
+  const categories = await db.getCategoriesWithLimitsAndPriority(user_id);
+  const subcategories = await db.getSubcategoriesWithTransactions(user_id);
+
+  const sortedCategories = categories.sort((a, b) => a.priority_value - b.priority_value);
+  const sortedSubcategories = subcategories.sort((a, b) => a.priority_value - b.priority_value);
+
+  let remainingAmount = amount;
+  let result = '';
+
+  for (const category of sortedCategories) {
+    if (category.id === category_id) {
+      const categoryTotal = category.total_transactions || 0;
+      const categoryLimit = category.category_limit;
+
+      if (categoryTotal + remainingAmount <= categoryLimit) {
+        result += `The selected category ${category.name} will not be over budget.\n`;
+        break;
+      } else {
+        const overLimitAmount = categoryTotal + remainingAmount - categoryLimit;
+        result += `The selected category ${category.name} will be over budget by ${overLimitAmount}.\n`;
+        remainingAmount = overLimitAmount;
+      }
+    }
+
+    for (const subcategory of sortedSubcategories.filter(sc => sc.parent_id === category.id)) {
+      if (!include_earmarked && subcategory.earmark) continue;
+
+      const subcategoryTotal = subcategory.total_transactions || 0;
+      const subcategoryLimit = subcategory.category_limit;
+
+      if (subcategoryTotal + remainingAmount <= subcategoryLimit) {
+        result += `Subcategory ${subcategory.name} will not be over budget.\n`;
+        break;
+      } else {
+        const overLimitAmount = subcategoryTotal + remainingAmount - subcategoryLimit;
+        result += `Subcategory ${subcategory.name} will be over budget by ${overLimitAmount}.\n`;
+        remainingAmount = overLimitAmount;
+      }
+    }
+  }
+
+  if (remainingAmount > 0) {
+    result += `All categories are filled, and ${remainingAmount} remains unallocated.\n`;
+  }
+
+  return result;
+}
 
 fastify.post('/check-expense', async (request, reply) => {  
   const { category_id, price } = request.body;  
