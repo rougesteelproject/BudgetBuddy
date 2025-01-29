@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { Accordion, AccordionSummary, AccordionDetails, Typography, TextField, Button, Switch, FormControlLabel, Select, MenuItem, Tooltip } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import TransactionItem from './TransactionItem';
+import SubcategoryAccordion from './SubcategoryAccordion';
 
-const CategoryAccordion = ({ category, transactions, showPriorityExpenses, editMode, categories }) => {
+const CategoryAccordion = ({ category, transactions = [], showPriorityExpenses, editMode, categories = [], onPriorityChange }) => {
   const [categoryName, setCategoryName] = useState(category.name);
   const [categoryLimit, setCategoryLimit] = useState(category.category_limit);
   const [categoryPriority, setCategoryPriority] = useState(category.priority_value);
@@ -13,7 +14,11 @@ const CategoryAccordion = ({ category, transactions, showPriorityExpenses, editM
 
   const handleNameChange = (e) => setCategoryName(e.target.value);
   const handleLimitChange = (e) => setCategoryLimit(e.target.value);
-  const handlePriorityChange = (e) => setCategoryPriority(e.target.value);
+  const handlePriorityChange = (e) => {
+    const newPriorityValue = parseInt(e.target.value, 10);
+    setCategoryPriority(newPriorityValue);
+    onPriorityChange(category.id, newPriorityValue);
+  };
   const handleEarmarkChange = () => setIsEarmarked(!isEarmarked);
   const handleParentCategoryChange = (e) => setParentCategoryId(e.target.value);
 
@@ -31,6 +36,16 @@ const CategoryAccordion = ({ category, transactions, showPriorityExpenses, editM
       console.error('Error saving category changes:', error);
     }
   };
+
+  useEffect(() => {
+    console.log('Subcategories:', category.subcategories);
+    console.log('Transactions for category:', transactions);
+  }, [category.subcategories, transactions]);
+
+  // Filter transactions for this specific category
+  const categoryTransactions = transactions.filter(
+    (transaction) => transaction.category_id === category.id
+  );
 
   return (
     <Accordion>
@@ -56,7 +71,7 @@ const CategoryAccordion = ({ category, transactions, showPriorityExpenses, editM
             />
             <Select
               label="Parent Category"
-              value={parentCategoryId}
+              value={parentCategoryId || ''}
               onChange={handleParentCategoryChange}
             >
               <MenuItem value={null}>None</MenuItem>
@@ -69,8 +84,8 @@ const CategoryAccordion = ({ category, transactions, showPriorityExpenses, editM
             </Button>
           </div>
         ) : null}
-        {transactions.length > 0 ? (
-          transactions.map((transaction) => (
+        {categoryTransactions.length > 0 ? (
+          categoryTransactions.map((transaction) => (
             <TransactionItem key={transaction.id} transaction={transaction} categories={categories} editMode={editMode} />
           ))
         ) : (
@@ -78,20 +93,27 @@ const CategoryAccordion = ({ category, transactions, showPriorityExpenses, editM
             No transactions for this category.
           </Typography>
         )}
-        {category.subcategories.length > 0 && (
+        {category.subcategories && category.subcategories.length > 0 && (
           <div style={{ marginLeft: '1rem' }}>
-            {category.subcategories.map((subcategory) => (
-              <CategoryAccordion
-                key={subcategory.id}
-                category={subcategory}
-                transactions={transactions.filter(
-                  (transaction) => transaction.category_id === subcategory.id
-                )}
-                showPriorityExpenses={showPriorityExpenses}
-                editMode={editMode}
-                categories={categories}
-              />
-            ))}
+            {category.subcategories.map((subcategory) => {
+              // Filter transactions for this specific subcategory
+              const subcategoryTransactions = transactions.filter(
+                (transaction) => transaction.category_id === subcategory.id
+              );
+
+              console.log(`Subcategory: ${subcategory.name}, Transactions:`, subcategoryTransactions);
+
+              return (
+                <SubcategoryAccordion
+                  key={subcategory.id}
+                  subcategory={subcategory}
+                  transactions={subcategoryTransactions}
+                  editMode={editMode}
+                  categories={categories}
+                  onPriorityChange={onPriorityChange}
+                />
+              );
+            })}
           </div>
         )}
       </AccordionDetails>

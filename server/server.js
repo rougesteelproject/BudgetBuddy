@@ -271,10 +271,14 @@ fastify.get('/api/transactions', async (request, reply) => {
       await fetchAndStoreTransactions(access_token, cursor, user_id);
     }
 
-    await recalculatePriorityExpenses(user_id);
+    await db.recalculatePriorityExpenses(user_id);
 
     const categories = await db.getCategoriesWithLimitsAndPriority(user_id);
     const transactions = await db.getTransactions(user_id);
+
+    console.log('Fetched categories:', categories);
+    console.log('Fetched transactions:', transactions);
+
     reply.send({ categories, transactions });
   } catch (error) {
     console.error('Error fetching transactions:', error);
@@ -293,7 +297,7 @@ fastify.put('/api/transactions/:transactionId/change-category', async (request, 
 
   try {
     await db.updateTransactionCategory(transactionId, category_id);
-    await recalculatePriorityExpenses(process.env.USER_ID);
+    await db.recalculatePriorityExpenses(process.env.USER_ID);
     reply.send({ success: true, message: 'Transaction category updated successfully.' });
   } catch (err) {
     console.error('Error updating transaction category:', err);
@@ -317,19 +321,14 @@ fastify.get('/categories', async (request, reply) => {
 
 //New Category
 fastify.post('/categories/new', async (request, reply) => {
-  const { name, user_id, priority_value = 0, category_limit = null } = request.body;
-
-  if (!name || typeof name !== 'string' || name.trim().length === 0) {
-    return reply.status(400).send({ error: 'Invalid category name.' });
-  }
+  const { name, user_id } = request.body;
 
   try {
-    const sanitizedCategoryName = name.trim().replace(/<[^>]*>?/gm, ''); // Basic sanitization
-    const categoryId = await db.createCategory(sanitizedCategoryName, user_id, priority_value, category_limit);
-    reply.send({ success: true, id: categoryId, name: sanitizedCategoryName });
-  } catch (err) {
-    console.error('Error creating new category:', err);
-    reply.status(500).send({ error: 'Unable to create new category.' });
+    const categoryId = await db.createCategory(name, process.env.USER_ID);
+    reply.send({ success: true, categoryId });
+  } catch (error) {
+    console.error('Error creating category:', error);
+    reply.status(500).send({ error: 'Failed to create category' });
   }
 });
 
@@ -358,7 +357,7 @@ fastify.put('/categories/:id', async (request, reply) => {
     }
 
     await Promise.all(promises);
-    await recalculatePriorityExpenses(process.env.USER_ID);
+    await db.recalculatePriorityExpenses(process.env.USER_ID);
 
     reply.send({ success: true, message: 'Category updated successfully' });
   } catch (error) {

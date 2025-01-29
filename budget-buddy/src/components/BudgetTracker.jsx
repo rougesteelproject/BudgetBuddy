@@ -15,6 +15,7 @@ const BudgetTracker = () => {
   const [amount, setAmount] = useState('');
   const [includeEarmarked, setIncludeEarmarked] = useState(false);
   const [simulationResult, setSimulationResult] = useState('');
+  const [categoryUpdates, setCategoryUpdates] = useState([]);
 
   const navigate = useNavigate();
 
@@ -59,52 +60,101 @@ const BudgetTracker = () => {
         const response = await axios.get('/api/transactions', {
           params: { user_id: process.env.REACT_APP_USER_ID },
         });
-
-        if (response.data) {
-          const { categories: fetchedCategories, transactions: fetchedTransactions } = response.data;
-
-          // Assign priority values to categories without one
-          const updatedCategories = fetchedCategories.map((category, index) => {
-            if (category.priority_value === null || category.priority_value === undefined) {
-              category.priority_value = index + 1; // Assign a priority value
-              // Save the updated priority value to the database
-              axios.put(`/categories/${category.id}`, { priority_value: category.priority_value });
-            }
-            return category;
-          });
-
-          setCategories(Array.isArray(updatedCategories) ? updatedCategories : []);
-          setTransactions(Array.isArray(fetchedTransactions) ? fetchedTransactions : []);
-        }
+        const { categories, transactions } = response.data;
+        setCategories(categories);
+        setTransactions(transactions);
+        console.log('Fetched categories:', categories);
+        console.log('Fetched transactions:', transactions);
       } catch (error) {
-        console.error('Client Error fetching data:', error);
+        console.error('Error fetching data:', error);
       }
     };
 
     fetchData();
   }, []);
 
-  const groupCategories = (categories) => {
+  const groupCategories = (categories, transactions = []) => {
     const grouped = categories.reduce((acc, category) => {
+      const categoryTransactions = transactions.filter(
+        transaction => transaction.category_id === category.id
+      );
+
       if (category.parent_id) {
         if (!acc[category.parent_id]) {
-          acc[category.parent_id] = { subcategories: [] };
+          acc[category.parent_id] = { ...acc[category.parent_id], subcategories: [] };
         }
-        acc[category.parent_id].subcategories.push(category);
+        acc[category.parent_id].subcategories.push({ ...category, transactions: categoryTransactions });
       } else {
-        acc[category.id] = { ...category, subcategories: acc[category.id]?.subcategories || [] };
+        acc[category.id] = {
+          ...category,
+          transactions: categoryTransactions,
+          subcategories: acc[category.id]?.subcategories || [],
+        };
       }
       return acc;
     }, {});
 
-    return Object.values(grouped);
+    return Object.values(grouped).map(category => ({
+      ...category,
+      subcategories: category.subcategories || [],
+    }));
   };
 
-  const groupedCategories = groupCategories(categories);
+  const calculateTotals = (categories, transactions) => {
+    return categories.map(category => {
+      const categoryTransactions = transactions.filter(
+        transaction => transaction.category_id === category.id
+      );
+      const subcategories = category.subcategories.map(subcategory => {
+        const subcategoryTransactions = transactions.filter(
+          transaction => transaction.category_id === subcategory.id
+        );
+        const subcategoryTotal = subcategoryTransactions.reduce(
+          (sum, transaction) => sum + transaction.amount,
+          0
+        );
+        return { ...subcategory, total: subcategoryTotal };
+      });
+
+      const categoryTotal = categoryTransactions.reduce(
+        (sum, transaction) => sum + transaction.amount,
+        0
+      );
+
+      // Sum subcategory totals into the main category total
+      const total = subcategories.reduce(
+        (sum, subcategory) => sum + subcategory.total,
+        categoryTotal
+      );
+
+      return { ...category, total, subcategories };
+    });
+  };
+
+  const groupedCategories = calculateTotals(groupCategories(categories, transactions), transactions);
+
+  const calculateGrandTotals = (categories) => {
+    let grandTotal = 0;
+    let grandTotalLimit = 0;
+
+    categories.forEach(category => {
+      grandTotal += category.total;
+      grandTotalLimit += category.category_limit;
+      category.subcategories.forEach(subcategory => {
+        grandTotal += subcategory.total;
+        grandTotalLimit += subcategory.category_limit;
+      });
+    });
+
+    return { grandTotal, grandTotalLimit };
+  };
+
+  const { grandTotal, grandTotalLimit } = calculateGrandTotals(groupedCategories);
 
   const handleCreateCategory = async () => {
     try {
-      await axios.post('/categories', { name: newCategoryName, user_id: process.env.REACT_APP_USER_ID });
+      const maxPriorityValue = Math.max(...categories.map(category => category.priority_value), 0);
+      await axios.post('/categories/new', { name: newCategoryName, user_id: process.env.REACT_APP_USER_ID, priority_value: maxPriorityValue + 1 });
       setNewCategoryName('');
       // Refresh categories
       const response = await axios.get('/api/transactions', {
@@ -116,11 +166,44 @@ const BudgetTracker = () => {
     }
   };
 
+  const handlePriorityChange = (categoryId, newPriorityValue) => {
+    const updatedCategories = categories.map(category => {
+      if (category.id === categoryId) {
+        return { ...category, priority_value: newPriorityValue };
+      } else if (category.priority_value >= newPriorityValue) {
+        return { ...category, priority_value: category.priority_value + 1 };
+      }
+      return category;
+    });
+
+    setCategories(updatedCategories);
+    setCategoryUpdates(updatedCategories);
+  };
+
+  const handleSaveChanges = async () => {
+    try {
+      await Promise.all(categoryUpdates.map(category => axios.put(`/categories/${category.id}`, category)));
+      setCategoryUpdates([]);
+      setEditMode(false);
+      // Refresh categories
+      const response = await axios.get('/api/transactions', {
+        params: { user_id: process.env.REACT_APP_USER_ID },
+      });
+      setCategories(response.data.categories);
+    } catch (error) {
+      console.error('Error saving category changes:', error);
+    }
+  };
+
   return (
     <div>
       <div style={{ padding: '1rem' }}>
         <Typography variant="h4" gutterBottom>
           Budget Tracker
+        </Typography>
+
+        <Typography variant="h6">
+          Grand Total: ${grandTotal}, Grand Total Limit: ${grandTotalLimit}
         </Typography>
 
         <FormControlLabel
@@ -155,6 +238,9 @@ const BudgetTracker = () => {
             <Button variant="contained" color="primary" onClick={handleCreateCategory}>
               Create Category
             </Button>
+            <Button variant="contained" color="primary" onClick={handleSaveChanges}>
+              Save All Changes
+            </Button>
           </div>
         )}
 
@@ -163,12 +249,11 @@ const BudgetTracker = () => {
             <CategoryAccordion
               key={category.id}
               category={category}
-              transactions={transactions.filter(
-                (transaction) => transaction.category_id === category.id
-              )}
+              transactions={transactions}
               showPriorityExpenses={showPriorityExpenses}
               editMode={editMode}
               categories={categories}
+              onPriorityChange={handlePriorityChange}
             />
           ))
         ) : (

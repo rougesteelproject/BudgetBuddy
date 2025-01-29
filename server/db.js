@@ -254,7 +254,7 @@ async function getCategoriesWithLimitsAndPriority(user_id) {
 }
 
 // Function to create a new category
-function createCategory(name, user_id, priority_value = 0, category_limit = null, parent_id=null) {
+function createCategory(name, user_id, priority_value = 0, category_limit = null, parent_id = null) {
   return new Promise((resolve, reject) => {
     db.run(
       `INSERT INTO categories (name, user_id, priority_value, category_limit, parent_id) VALUES (?, ?, ?, ?, ?)
@@ -421,6 +421,19 @@ async function updateParentId(categoryId, parentId) {
       function (err) {
         if (err) reject(err);
         resolve({ changes: this.changes });
+      }
+    );
+  });
+}
+
+function updateCategoryPriority(id, priority_value) {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE categories SET priority_value = ? WHERE id = ?`,
+      [priority_value, id],
+      function (err) {
+        if (err) return reject(err);
+        resolve();
       }
     );
   });
@@ -715,8 +728,10 @@ module.exports = {
   getCategoriesWithLimitsAndPriority,
   updateSubcategoryExpenses,
   updateCategoryLimit,
+  updateCategoryPriority,
   updateParentId,
   getAlreadyOverBudgetCategories,
   getHypotheticallyOverBudgetCategories,
-  distributeExpense
+  distributeExpense,
+  recalculatePriorityExpenses
 };
