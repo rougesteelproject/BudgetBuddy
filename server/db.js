@@ -45,7 +45,21 @@ db.serialize(() => {
       FOREIGN KEY (user_id) REFERENCES users (user_id),
       FOREIGN KEY (parent_id) REFERENCES categories (id),
       UNIQUE(name, user_id) -- Ensure unique categories per user
+      
     );
+  `);
+
+  db.run(`
+    CREATE TRIGGER IF NOT EXISTS check_parent_category
+    BEFORE UPDATE OF parent_id ON categories
+    FOR EACH ROW
+    WHEN NEW.parent_id IS NOT NULL
+    BEGIN
+      SELECT CASE
+        WHEN (SELECT parent_id FROM categories WHERE id = NEW.parent_id) IS NOT NULL THEN
+          RAISE(ABORT, 'Cannot set a category with a parent as the new parent.')
+      END;
+    END;
   `);
 
   // Transactions table

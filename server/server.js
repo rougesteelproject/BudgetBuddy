@@ -345,6 +345,11 @@ fastify.put('/categories/:id', async (request, reply) => {
     }
 
     if (parent_id !== undefined) {
+      // Check if the new parent category already has a parent
+      const parentCategory = await db.getCategory(parent_id);
+      if (parentCategory && parentCategory.parent_id) {
+        return reply.status(400).send({ error: 'Cannot set a category with a parent as the new parent.' });
+      }
       promises.push(db.updateParentId(id, parent_id || null));
     }
 

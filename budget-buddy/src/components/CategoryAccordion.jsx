@@ -47,6 +47,9 @@ const CategoryAccordion = ({ category, transactions = [], showPriorityExpenses, 
     (transaction) => transaction.category_id === category.id
   );
 
+  // Filter out categories that already have a parent
+  const availableParentCategories = categories.filter(cat => !cat.parent_id || cat.id === category.parent_id);
+
   return (
     <Accordion>
       <AccordionSummary expandIcon={<ExpandMoreIcon />}>
@@ -75,7 +78,7 @@ const CategoryAccordion = ({ category, transactions = [], showPriorityExpenses, 
               onChange={handleParentCategoryChange}
             >
               <MenuItem value={null}>None</MenuItem>
-              {categories.filter(cat => cat.id !== category.id).map(cat => (
+              {availableParentCategories.filter(cat => cat.id !== category.id).map(cat => (
                 <MenuItem key={cat.id} value={cat.id}>{cat.name}</MenuItem>
               ))}
             </Select>
