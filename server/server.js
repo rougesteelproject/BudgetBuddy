@@ -321,10 +321,11 @@ fastify.get('/categories', async (request, reply) => {
 
 //New Category
 fastify.post('/categories/new', async (request, reply) => {
-  const { name, user_id } = request.body;
+  const { name, user_id, category_limit, parent_id } = request.body;
 
   try {
-    const categoryId = await db.createCategory(name, process.env.USER_ID);
+    const categoryId = await db.createCategory(name, process.env.USER_ID, category_limit, parent_id);
+
     reply.send({ success: true, categoryId });
   } catch (error) {
     console.error('Error creating category:', error);

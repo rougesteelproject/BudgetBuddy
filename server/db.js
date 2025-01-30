@@ -268,20 +268,33 @@ async function getCategoriesWithLimitsAndPriority(user_id) {
 }
 
 // Function to create a new category
-function createCategory(name, user_id, priority_value = 0, category_limit = null, parent_id = null) {
+async function createCategory(name, user_id, category_limit = null, parent_id = null) {
   return new Promise((resolve, reject) => {
-    db.run(
-      `INSERT INTO categories (name, user_id, priority_value, category_limit, parent_id) VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(name, user_id) DO UPDATE SET
-        priority_value = excluded.priority_value,
-        category_limit = excluded.category_limit,
-        parent_id = excluded.parent_id`,
-      [name, user_id, priority_value, category_limit, parent_id],
-      function (err) {
+    // Get the highest priority_value for the user
+    db.get(
+      `SELECT MAX(priority_value) AS max_priority FROM categories WHERE user_id = ?`,
+      [user_id],
+      (err, row) => {
         if (err) {
           return reject(err);
         }
-        resolve(this.lastID); // Return the new category's ID
+
+        const newPriorityValue = (row.max_priority || 0) + 1;
+
+        db.run(
+          `INSERT INTO categories (name, user_id, priority_value, category_limit, parent_id) VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(name, user_id) DO UPDATE SET
+            priority_value = excluded.priority_value,
+            category_limit = excluded.category_limit,
+            parent_id = excluded.parent_id`,
+          [name, user_id, newPriorityValue, category_limit, parent_id],
+          function (err) {
+            if (err) {
+              return reject(err);
+            }
+            resolve(this.lastID); // Return the new category's ID
+          }
+        );
       }
     );
   });
