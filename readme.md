@@ -1,9 +1,7 @@
-Uses Fastify and Plaid's API to serve transaction data and user-defined categories and subcategories.
-React front end provides budgeting functions, including option to calculate the impact a future transaction will 
-have on the budget.
-Users can "Earmark" categories to prevent spending money needed for future transactions.
-Optional "Priority Spending" calculation shows where saving needs to be done to balance spending in high
-priority categories.
+
+- React front end provides budgeting functions, including option to calculate the impact a future transaction will have on the budget.
+- Users can "Earmark" categories to prevent spending money needed for future transactions.
+- Optional "Priority Spending" calculation shows where saving needs to be done to balance spending in high priority categories.
 
 To run server:
 - cd into 'server'
