@@ -38,7 +38,7 @@ BUDGET
 - STRETCH ability to automatically put new transactions with the same name in the same category
 
 DATABASE:
-- Switch to a different, secure database
+- Switch to a different, secure database (currently using SQLite)
 - constraint that the parent_id can't = id?
 - STRETCH  hold subcategories are the only kind that can be nested into another (non-hold) subcategory
 - STRETCH user payment preference?
